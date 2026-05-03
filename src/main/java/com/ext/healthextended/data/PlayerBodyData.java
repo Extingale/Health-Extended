@@ -15,7 +15,7 @@ public class PlayerBodyData {
                     BodyPartHealth.CODEC
             ).xmap(
                     map -> new PlayerBodyData(new EnumMap<>(map)),
-                    data -> new HashMap<>(data.parts)
+                    data -> new EnumMap<>(data.parts)
             );
 
     public static final StreamCodec<RegistryFriendlyByteBuf, PlayerBodyData> STREAM_CODEC = new StreamCodec<>() {

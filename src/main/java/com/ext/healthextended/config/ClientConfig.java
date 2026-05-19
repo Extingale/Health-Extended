@@ -13,7 +13,7 @@ public final class ClientConfig {
         builder.push("ui");
         ANCHOR_PANEL_RIGHT = builder
                 .comment("If true, inventory health panel is anchored to the right side of the inventory.")
-                .define("anchorPanelRight", false);
+            .define("anchorPanelRight", true);
         builder.pop();
 
         SPEC = builder.build();

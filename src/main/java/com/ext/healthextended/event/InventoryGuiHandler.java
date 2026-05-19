@@ -27,17 +27,14 @@ public class InventoryGuiHandler {
 
     @SubscribeEvent
     public static void onInventoryRender(ScreenEvent.Render.Post event) {
-        if (!(event.getScreen() instanceof InventoryScreen)) return;
+        if (!(event.getScreen() instanceof InventoryScreen screen)) return;
 
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null) return;
         if (!(mc.player instanceof AbstractClientPlayer clientPlayer)) return;
 
-        // Derive leftPos / topPos using the same formula as AbstractContainerScreen
-        int screenWidth  = event.getScreen().width;
-        int screenHeight = event.getScreen().height;
-        int leftPos = (screenWidth  - INV_WIDTH)  / 2;
-        int topPos  = (screenHeight - INV_HEIGHT) / 2;
+        int leftPos = screen.getGuiLeft();
+        int topPos = screen.getGuiTop();
 
         PlayerBodyData bodyData = clientPlayer.getData(ModAttachmentTypes.PLAYER_BODY_DATA);
 
@@ -64,22 +61,22 @@ public class InventoryGuiHandler {
                     leftPos, topPos, mouseX, mouseY);
         }
         if (paperdollHovered != null && !HealthTabPanel.isMouseOverPanel(mouseX, mouseY, panelX, panelY)) {
-            guiGraphics.renderComponentTooltip(mc.font, HealthTabPanel.getBodyPartTooltip(bodyData, paperdollHovered), (int) mouseX, (int) mouseY);
+            HealthTabPanel.renderBodyPartTooltip(guiGraphics, mc.font, bodyData, paperdollHovered, (int) mouseX, (int) mouseY);
+        } else {
+            HealthTabPanel.renderPendingTooltip(guiGraphics, mc.font, bodyData, (int) mouseX, (int) mouseY);
         }
     }
 
     @SubscribeEvent
     public static void onInventoryMouseScrolled(ScreenEvent.MouseScrolled.Pre event) {
-        if (!(event.getScreen() instanceof InventoryScreen)) return;
+        if (!(event.getScreen() instanceof InventoryScreen screen)) return;
 
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null) return;
         if (!(mc.player instanceof AbstractClientPlayer clientPlayer)) return;
 
-        int screenWidth = event.getScreen().width;
-        int screenHeight = event.getScreen().height;
-        int leftPos = (screenWidth - INV_WIDTH) / 2;
-        int topPos = (screenHeight - INV_HEIGHT) / 2;
+        int leftPos = screen.getGuiLeft();
+        int topPos = screen.getGuiTop();
         int panelX = getPanelX(leftPos);
         int panelY = topPos;
 

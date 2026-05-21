@@ -3,6 +3,7 @@ package com.ext.healthextended.logic;
 import com.ext.healthextended.data.BodyPart;
 import com.ext.healthextended.data.BodyPartHealth;
 import com.ext.healthextended.data.HediffDef;
+import com.ext.healthextended.data.HitFace;
 import com.ext.healthextended.data.PlayerBodyData;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
@@ -19,25 +20,22 @@ import net.minecraft.world.entity.animal.Wolf;
 import net.minecraft.world.item.AxeItem;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.SwordItem;
+import net.minecraft.world.phys.Vec3;
 
+import javax.annotation.Nullable;
 import java.util.Locale;
 
 public final class LocationalHealthLogic {
 
-    private static final BodyPart[] ROUTING_PARTS = {
-            BodyPart.TORSO,
-            BodyPart.HEAD,
-            BodyPart.LEFT_ARM,
-            BodyPart.RIGHT_ARM,
-            BodyPart.LEFT_LEG,
-            BodyPart.RIGHT_LEG
-    };
-
-    // placeholder weights for now, wont be needed after true hit location detectoin exists
-    private static final int[] ROUTING_WEIGHTS = {5, 1, 2, 2, 2, 2};
-
     private LocationalHealthLogic() {
     }
+
+    /**
+     * Result returned from {@link #applyDamage}. Carries the resolved body part,
+     * the hediff that was applied, the integer damage amount, and the vertical
+     * position within the body part (for wound-mark placement).
+     */
+    public record DamageResult(BodyPart part, HediffDef hediff, int damage, float localV, HitFace face) {}
 
     public static float getWeightedCurrent(PlayerBodyData bodyData) {
         float total = 0.0f;
@@ -79,67 +77,55 @@ public final class LocationalHealthLogic {
     }
 
     public static BodyPart chooseDamagedPart(Player player, DamageSource source) {
-        String damageId = getDamageId(source);
-
-        if (isAny(damageId, "hotfloor", "campfire", "cactus", "sweetberrybush", "stalagmite")) {
-            return chooseBlockContactPart(player, damageId);
-        }
-
-        if (isAny(damageId, "fall", "starve", "drown", "inwall", "outofworld", "magic", "indirectmagic", "wither", "dragonbreath", "mobattack", "playerattack")) {
-            return switch (damageId) {
-                case "fall" -> player.getRandom().nextBoolean() ? BodyPart.LEFT_LEG : BodyPart.RIGHT_LEG;
-                case "starve", "magic", "indirectmagic", "wither", "dragonbreath", "outofworld" -> BodyPart.TORSO;
-                case "drown", "inwall" -> BodyPart.HEAD;
-                default -> chooseUpperBodyPart(player);
-            };
-        }
-
-        if (isAny(damageId, "freeze")) {
-            return chooseLimbPart(player, true);
-        }
-
-        if (isAny(damageId, "infire", "onfire", "lava", "lightningbolt")) {
-            if ("lightningbolt".equals(damageId)) {
-                return BodyPart.HEAD;
-            }
-            return chooseFirePart(player);
-        }
-
-        if (isAny(damageId, "flyintowall", "explosion", "explosion.player")) {
-            return BodyPart.TORSO;
-        }
-
-        Entity directEntity = source.getDirectEntity();
-        if (directEntity instanceof AbstractArrow || directEntity instanceof ThrownTrident || isAny(damageId, "arrow", "trident")) {
-            return chooseUpperBodyPart(player);
-        }
-
-        int total = 0;
-        for (int weight : ROUTING_WEIGHTS) {
-            total += weight;
-        }
-
-        int roll = player.getRandom().nextInt(total);
-        for (int index = 0; index < ROUTING_PARTS.length; index++) {
-            roll -= ROUTING_WEIGHTS[index];
-            if (roll < 0) {
-                return ROUTING_PARTS[index];
-            }
-        }
-
-        return BodyPart.TORSO;
+        return HitLocationResolver.resolve(player, source, null).part();
     }
 
     public static int toLocationalDamage(float vanillaDamageAmount) {
         return Math.max(1, Mth.ceil(vanillaDamageAmount));
     }
 
-    public static BodyPart applyDamage(PlayerBodyData bodyData, Player player, DamageSource source, float vanillaDamageAmount) {
+    /**
+     * Applies locational damage to {@code bodyData} and returns a {@link DamageResult}
+     * containing the resolved body part, hediff, damage amount, and wound-mark anchor.
+     *
+     * @param projectileImpact optional pre-captured projectile impact position
+     *                         from {@link com.ext.healthextended.event.ProjectileImpactTracker}
+     */
+    public static DamageResult applyDamage(PlayerBodyData bodyData, Player player, DamageSource source,
+                                           float vanillaDamageAmount, @Nullable Vec3 projectileImpact) {
         int damage = toLocationalDamage(vanillaDamageAmount);
-        BodyPart part = chooseDamagedPart(player, source);
+        HitLocationResolver.ImpactResult impact = HitLocationResolver.resolve(player, source, projectileImpact);
         HediffDef hediff = chooseHediff(source, damage);
-        HediffLogic.applyDamage(bodyData.getHealth(part), hediff, damage, player.getRandom(), buildDamageSourceDescription(source, hediff));
-        return part;
+        String description = buildDamageSourceDescription(source, hediff);
+        BodyPart part = impact.part();
+
+        if (isLimbPart(part)) {
+            int limbHp = bodyData.getHealth(part).getCurrentHp();
+            if (limbHp <= 0) {
+                // Limb already destroyed — all damage overflows to torso
+                HediffLogic.applyDamage(bodyData.getHealth(BodyPart.TORSO), hediff, damage,
+                        player.getRandom(), description);
+            } else if (damage > limbHp) {
+                // Hit exceeds remaining limb capacity — fill the limb, spill excess to torso
+                HediffLogic.applyDamage(bodyData.getHealth(part), hediff, limbHp,
+                        player.getRandom(), description);
+                HediffLogic.applyDamage(bodyData.getHealth(BodyPart.TORSO), hediff, damage - limbHp,
+                        player.getRandom(), description);
+            } else {
+                HediffLogic.applyDamage(bodyData.getHealth(part), hediff, damage,
+                        player.getRandom(), description);
+            }
+        } else {
+            HediffLogic.applyDamage(bodyData.getHealth(part), hediff, damage,
+                    player.getRandom(), description);
+        }
+        return new DamageResult(part, hediff, damage, impact.localV(), impact.face());
+    }
+
+    /** Legacy overload kept for call-sites that do not have a stored projectile impact. */
+    public static BodyPart applyDamage(PlayerBodyData bodyData, Player player, DamageSource source,
+                                       float vanillaDamageAmount) {
+        return applyDamage(bodyData, player, source, vanillaDamageAmount, null).part();
     }
 
     public static String buildDamageSourceDescription(DamageSource source, HediffDef hediff) {
@@ -150,10 +136,7 @@ public final class LocationalHealthLogic {
             if (hediff == HediffDef.BITE) {
                 return "Bitten by " + sourceName;
             }
-            if (hediff == HediffDef.STAB) {
-                return "Stabbed by " + sourceName;
-            }
-            if (hediff == HediffDef.CUT || hediff == HediffDef.DEEP_CUT) {
+            if (hediff == HediffDef.CUT) {
                 return "Cut by " + sourceName;
             }
             if (hediff == HediffDef.MAGIC_WOUND) {
@@ -162,10 +145,10 @@ public final class LocationalHealthLogic {
             if (hediff == HediffDef.WITHERED) {
                 return "Withered by " + sourceName;
             }
-            if (hediff == HediffDef.BRUISE || hediff == HediffDef.CRUSH || hediff == HediffDef.FRACTURE) {
+            if (hediff == HediffDef.BRUISE) {
                 return "Hit by " + sourceName;
             }
-            if (hediff == HediffDef.BURN || hediff == HediffDef.ELECTRICAL_BURN) {
+            if (hediff == HediffDef.BURN) {
                 return "Burned by " + sourceName;
             }
         }
@@ -221,12 +204,6 @@ public final class LocationalHealthLogic {
         Entity attacker = source.getEntity();
 
         if ("fall".equals(damageId)) {
-            if (damage >= 7) {
-                return HediffDef.CRUSH;
-            }
-            if (damage >= 4) {
-                return HediffDef.FRACTURE;
-            }
             return HediffDef.BRUISE;
         }
 
@@ -243,7 +220,7 @@ public final class LocationalHealthLogic {
             return HediffDef.BURN;
         }
         if (isAny(damageId, "lightningbolt")) {
-            return HediffDef.ELECTRICAL_BURN;
+            return HediffDef.BURN;
         }
         if (isAny(damageId, "magic", "indirectmagic", "dragonbreath", "thorns")) {
             return HediffDef.MAGIC_WOUND;
@@ -252,20 +229,20 @@ public final class LocationalHealthLogic {
             return HediffDef.WITHERED;
         }
         if (isAny(damageId, "cactus", "sweetberrybush")) {
-            return "cactus".equals(damageId) ? HediffDef.PIERCING_WOUND : HediffDef.MINOR_SCRATCH;
+            return HediffDef.CUT;
         }
         if (isAny(damageId, "flyintowall")) {
-            return damage >= 6 ? HediffDef.CRUSH : HediffDef.BRUISE;
+            return HediffDef.BRUISE;
         }
         if (isAny(damageId, "explosion", "explosion.player")) {
-            return damage >= 6 ? HediffDef.CRUSH : HediffDef.BRUISE;
+            return HediffDef.BRUISE;
         }
 
         if (directEntity instanceof ThrownTrident || "trident".equals(damageId)) {
-            return HediffDef.STAB;
+            return HediffDef.CUT;
         }
         if (directEntity instanceof AbstractArrow || "arrow".equals(damageId)) {
-            return HediffDef.STAB;
+            return HediffDef.CUT;
         }
 
         if (attacker instanceof Zombie || attacker instanceof Spider || attacker instanceof CaveSpider || attacker instanceof Wolf || attacker instanceof Bee) {
@@ -275,7 +252,7 @@ public final class LocationalHealthLogic {
         if (attacker instanceof LivingEntity livingAttacker) {
             ItemStack weapon = livingAttacker.getMainHandItem();
             if (weapon.getItem() instanceof SwordItem || weapon.getItem() instanceof AxeItem) {
-                return damage >= 5 ? HediffDef.DEEP_CUT : HediffDef.CUT;
+                return HediffDef.CUT;
             }
         }
 
@@ -311,6 +288,11 @@ public final class LocationalHealthLogic {
             }
         }
         return false;
+    }
+
+    private static boolean isLimbPart(BodyPart part) {
+        return part == BodyPart.LEFT_ARM || part == BodyPart.RIGHT_ARM
+                || part == BodyPart.LEFT_LEG || part == BodyPart.RIGHT_LEG;
     }
 
     private static BodyPart chooseUpperBodyPart(Player player) {

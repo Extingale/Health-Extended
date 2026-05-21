@@ -2,6 +2,7 @@ package com.ext.healthextended;
 
 import com.ext.healthextended.config.ClientConfig;
 import com.ext.healthextended.event.PlayerEventHandler;
+import com.ext.healthextended.event.ProjectileImpactTracker;
 import com.ext.healthextended.registry.ModAttachmentTypes;
 import com.mojang.logging.LogUtils;
 import net.neoforged.bus.api.IEventBus;
@@ -20,6 +21,8 @@ public class HealthExtended {
         ModAttachmentTypes.ATTACHMENT_TYPES.register(modEventBus);
         modContainer.registerConfig(ModConfig.Type.CLIENT, ClientConfig.SPEC);
 
-        NeoForge.EVENT_BUS.register(new PlayerEventHandler());
+        ProjectileImpactTracker impactTracker = new ProjectileImpactTracker();
+        NeoForge.EVENT_BUS.register(impactTracker);
+        NeoForge.EVENT_BUS.register(new PlayerEventHandler(impactTracker));
     }
 }

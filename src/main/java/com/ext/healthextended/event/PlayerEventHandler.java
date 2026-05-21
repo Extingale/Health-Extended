@@ -1,16 +1,22 @@
 package com.ext.healthextended.event;
 
+import com.ext.healthextended.data.HitFace;
 import com.ext.healthextended.data.BodyPart;
 import com.ext.healthextended.data.PlayerBodyData;
 import com.ext.healthextended.data.HediffDef;
+import com.ext.healthextended.data.WoundData;
+import com.ext.healthextended.data.WoundMark;
+import com.ext.healthextended.data.WoundVisualType;
 import com.ext.healthextended.logic.EffectConversionLogic;
 import com.ext.healthextended.logic.HediffLogic;
 import com.ext.healthextended.logic.LocationalHealthLogic;
 import com.ext.healthextended.registry.ModAttachmentTypes;
 import net.minecraft.world.food.FoodData;
 import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.phys.Vec3;
 import net.minecraft.tags.FluidTags;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.event.entity.living.LivingDamageEvent;
@@ -31,9 +37,14 @@ import java.util.UUID;
 
 public class PlayerEventHandler {
 
+    private final ProjectileImpactTracker impactTracker;
     private final Set<UUID> pendingHeadDeaths = new HashSet<>();
     private final Map<UUID, Integer> hiddenNaturalRegenTimers = new HashMap<>();
     private final Map<UUID, RecentImpactContext> recentImpactContexts = new HashMap<>();
+
+    public PlayerEventHandler(ProjectileImpactTracker impactTracker) {
+        this.impactTracker = impactTracker;
+    }
 
     @SubscribeEvent
     public void onPlayerLogin(PlayerEvent.PlayerLoggedInEvent event) {
@@ -116,6 +127,7 @@ public class PlayerEventHandler {
         PlayerBodyData bodyData = player.getData(ModAttachmentTypes.PLAYER_BODY_DATA);
         BodyPart recentImpactPart = resolveRecentImpactPart(player, primarySourceEntity(event.getSource()));
         boolean handledSpecialEffectDamage = false;
+        LocationalHealthLogic.DamageResult effectResult = null;
         if (isHeartAttackSuffocationDamage(player, bodyData, event)) {
             handledSpecialEffectDamage = HediffLogic.applySpecialSeverity(
                     bodyData,
@@ -126,10 +138,45 @@ public class PlayerEventHandler {
                     "Caused by Heart Attack"
             );
         } else {
-            handledSpecialEffectDamage = EffectConversionLogic.handleSpecialPlayerEffectDamage(bodyData, player, event.getSource(), event.getNewDamage(), recentImpactPart);
+            effectResult = EffectConversionLogic.handleSpecialPlayerEffectDamage(bodyData, player, event.getSource(), event.getNewDamage(), recentImpactPart);
+            handledSpecialEffectDamage = effectResult != null;
         }
         if (!handledSpecialEffectDamage && !isStarvationDamage(event)) {
-            rememberRecentImpact(player, event.getSource(), LocationalHealthLogic.applyDamage(bodyData, player, event.getSource(), event.getNewDamage()));
+            Vec3 projectileImpact = impactTracker.consumeImpact(event.getSource().getDirectEntity());
+            LocationalHealthLogic.DamageResult result = LocationalHealthLogic.applyDamage(
+                    bodyData, player, event.getSource(), event.getNewDamage(), projectileImpact);
+            rememberRecentImpact(player, event.getSource(), result.part());
+            // Emit a wound mark for the client render layer
+            WoundVisualType woundType = WoundVisualType.fromHediff(result.hediff());
+            if (woundType != null) {
+                WoundData woundData = player.getData(ModAttachmentTypes.WOUND_DATA);
+                float severity = result.damage() / (float) Math.max(1, result.hediff().getMaxHpLossAtFullSeverity());
+                woundData.addMark(new WoundMark(
+                        result.part(), woundType, Math.min(1.0f, severity), result.localV(),
+                        result.face(), player.level().getGameTime()));
+                player.syncData(ModAttachmentTypes.WOUND_DATA);
+            }
+        } else if (effectResult != null) {
+            WoundVisualType woundType = WoundVisualType.fromHediff(effectResult.hediff());
+            if (woundType != null) {
+                WoundData woundData = player.getData(ModAttachmentTypes.WOUND_DATA);
+                float severity = Math.min(1.0f, effectResult.damage() / (float) Math.max(1, effectResult.hediff().getMaxHpLossAtFullSeverity()));
+                long gameTime = player.level().getGameTime();
+                woundData.addMark(new WoundMark(
+                        effectResult.part(), woundType, severity,
+                        effectResult.localV(), effectResult.face(), gameTime));
+                // Extra marks for amplified effects (Poison II/III, Wither II/III, etc.)
+                int extraCount = getEffectAmplifier(player, effectResult.hediff());
+                BodyPart[] allParts = BodyPart.values();
+                for (int i = 0; i < extraCount; i++) {
+                    BodyPart extraPart = allParts[player.getRandom().nextInt(allParts.length)];
+                    woundData.addMark(new WoundMark(
+                            extraPart, woundType, severity,
+                            player.getRandom().nextFloat(),
+                            HitFace.values()[player.getRandom().nextInt(HitFace.values().length)], gameTime));
+                }
+                player.syncData(ModAttachmentTypes.WOUND_DATA);
+            }
         }
         HediffLogic.updateSpecialHediffs(bodyData, player.tickCount);
         player.syncData(ModAttachmentTypes.PLAYER_BODY_DATA);
@@ -204,6 +251,16 @@ public class PlayerEventHandler {
             changed = true;
         }
         changed |= tickHiddenNaturalRegeneration(player, bodyData);
+
+        // Advance the projectile impact tracker's tick counter (idempotent for the same tickCount).
+        impactTracker.tick(player.tickCount);
+
+        // Prune expired wound marks and sync if anything was removed.
+        WoundData woundData = player.getData(ModAttachmentTypes.WOUND_DATA);
+        if (woundData.pruneExpired(player.level().getGameTime())) {
+            player.syncData(ModAttachmentTypes.WOUND_DATA);
+        }
+
         if (LocationalHealthLogic.isHeadDestroyed(bodyData) && !player.isDeadOrDying()) {
             pendingHeadDeaths.add(playerId);
             if (changed) {
@@ -325,6 +382,17 @@ public class PlayerEventHandler {
 
     private static boolean isStarvationDamage(LivingDamageEvent.Pre event) {
         return event.getSource().getMsgId().toLowerCase(Locale.ROOT).replace("_", "").equals("starve");
+    }
+
+    private static int getEffectAmplifier(Player player, HediffDef hediff) {
+        var holder = switch (hediff) {
+            case POISONED -> MobEffects.POISON;
+            case WITHERED -> MobEffects.WITHER;
+            default -> null;
+        };
+        if (holder == null) return 0;
+        MobEffectInstance instance = player.getEffect(holder);
+        return instance != null ? instance.getAmplifier() : 0;
     }
 
     private record RecentImpactContext(long gameTime, BodyPart part, UUID sourceEntityId, UUID directEntityId) {

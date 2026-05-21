@@ -30,6 +30,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
+import com.ext.healthextended.data.HitFace;
+
 public final class EffectConversionLogic {
 
     public static final String POISON_EFFECT_ID = "minecraft:poison";
@@ -154,53 +156,61 @@ public final class EffectConversionLogic {
         );
     }
 
-    public static boolean handleSpecialPlayerEffectDamage(PlayerBodyData bodyData, Player player, DamageSource source, float vanillaDamageAmount, BodyPart hintedPart) {
+    public static LocationalHealthLogic.DamageResult handleSpecialPlayerEffectDamage(PlayerBodyData bodyData, Player player, DamageSource source, float vanillaDamageAmount, BodyPart hintedPart) {
         if (isWitherEffectTick(player, source)) {
             StatusLocation status = findStatus(bodyData, WITHER_EFFECT_ID);
-            BodyPart targetPart = status == null ? BodyPart.TORSO : status.part();
+            BodyPart anchoredPart = status == null ? BodyPart.TORSO : status.part();
+            BodyPart targetPart = chooseWitherTargetPart(bodyData, anchoredPart);
+            int witherDmg = Math.max(1, Mth.ceil(vanillaDamageAmount));
             HediffLogic.applyStatusDerivedDamage(
                     bodyData.getHealth(targetPart),
                     HediffDef.WITHERED,
-                    Math.max(1, Mth.ceil(vanillaDamageAmount)),
+                    witherDmg,
                     player.getRandom(),
                     WITHER_EFFECT_ID,
                     status == null ? "Caused by wither" : status.instance().getSourceDescription()
             );
-            return true;
+            return new LocationalHealthLogic.DamageResult(targetPart, HediffDef.WITHERED, witherDmg, 0.5f,
+                    HitFace.values()[player.getRandom().nextInt(HitFace.values().length)]);
         }
 
         if (isPoisonEffectTick(player, source)) {
             StatusLocation status = findStatus(bodyData, POISON_EFFECT_ID);
             BodyPart targetPart = choosePoisonTargetPart(bodyData, status == null ? BodyPart.TORSO : status.part());
+            int poisonDmg = Math.max(1, Mth.ceil(vanillaDamageAmount));
+            BodyPart effectivePart = targetPart != null ? targetPart : BodyPart.TORSO;
             if (targetPart != null) {
                 HediffLogic.applyStatusDerivedCappedDamage(
                         bodyData.getHealth(targetPart),
                         HediffDef.POISONED,
-                        Math.max(1, Mth.ceil(vanillaDamageAmount)),
+                        poisonDmg,
                         POISON_PART_CAP_HP,
                         POISON_EFFECT_ID,
                         status == null ? "Caused by poison" : status.instance().getSourceDescription()
                 );
             }
-            return true;
+            return new LocationalHealthLogic.DamageResult(effectivePart, HediffDef.POISONED, poisonDmg, 0.5f,
+                    HitFace.values()[player.getRandom().nextInt(HitFace.values().length)]);
         }
 
         if (isInstantMagicDamage(source)) {
             BodyPart targetPart = hintedPart != null
                     ? hintedPart
                     : chooseDirectEffectTargetPart(player, source.getDirectEntity(), source.getEntity(), true);
+            int magicDmg = Math.max(1, Mth.ceil(vanillaDamageAmount));
             HediffLogic.applyDamage(
                     bodyData.getHealth(targetPart),
                     HediffDef.MAGIC_WOUND,
-                    Math.max(1, Mth.ceil(vanillaDamageAmount)),
+                    magicDmg,
                     player.getRandom(),
                     // vanilla uses half-hearts, so we round to the nearest half
                     LocationalHealthLogic.buildDamageSourceDescription(source, HediffDef.MAGIC_WOUND)
             );
-            return true;
+            return new LocationalHealthLogic.DamageResult(targetPart, HediffDef.MAGIC_WOUND, magicDmg, 0.5f,
+                    HitFace.values()[player.getRandom().nextInt(HitFace.values().length)]);
         }
 
-        return false;
+        return null;
     }
 
     public static boolean handleSpecialPlayerHealing(PlayerBodyData bodyData, Player player, float healAmount) {
@@ -347,6 +357,36 @@ public final class EffectConversionLogic {
         }
 
         return LocationalHealthLogic.chooseEnvironmentStatusTargetPart(player, isHarmful(effectInstance));
+    }
+
+    /**
+     * Finds the first body part (starting from the wither-effect anchor) that still
+     * has HP remaining, so wither damage spreads to alive parts once earlier ones
+     * are destroyed.  Falls back to TORSO if every part is at 0 HP.
+     */
+    private static BodyPart chooseWitherTargetPart(PlayerBodyData bodyData, BodyPart anchoredPart) {
+        BodyPart[] order = {
+                anchoredPart,
+                BodyPart.TORSO,
+                BodyPart.HEAD,
+                BodyPart.LEFT_ARM,
+                BodyPart.RIGHT_ARM,
+                BodyPart.LEFT_LEG,
+                BodyPart.RIGHT_LEG
+        };
+
+        Set<BodyPart> seen = new HashSet<>();
+        for (BodyPart part : order) {
+            if (!seen.add(part)) {
+                continue;
+            }
+            if (bodyData.getHealth(part).getCurrentHp() > 0) {
+                return part;
+            }
+        }
+
+        // All parts destroyed — keep hitting torso to progress the heart-attack chain
+        return BodyPart.TORSO;
     }
 
     private static BodyPart choosePoisonTargetPart(PlayerBodyData bodyData, BodyPart anchoredPart) {

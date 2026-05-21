@@ -46,8 +46,7 @@ authors="Ext"
 
 # The description text for the mod (multi line!) (#mandatory)
 description='''
-Health Extended — foundational framework replacing the vanilla health bar with a Rimworld-style
-locational health system. Body parts, locational damage, status effect spread, aging, and more.
+Extends the game's health mechanics with locational damage and persistent medical statuses, integrated right into your inventory screen.
 '''
 
 # The [[mixins]] block allows you to declare your mixin config to FML so that it gets loaded.

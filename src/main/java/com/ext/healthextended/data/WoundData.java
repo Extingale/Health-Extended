@@ -9,7 +9,7 @@ import java.util.List;
 /**
  * Holds all active wound marks for a single player.
  *
- * <p>Wound marks are cosmetic and ephemeral — this attachment is intentionally
+ * <p>Wound marks are cosmetic and ephemeral (cool word that means something) — this attachment is intentionally
  * not serialized to disk. Marks are emitted by {@link com.ext.healthextended.logic.LocationalHealthLogic}
  * whenever damage is applied and fade out over time via the render layer.</p>
  */

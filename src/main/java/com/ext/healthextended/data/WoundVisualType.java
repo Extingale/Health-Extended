@@ -23,7 +23,7 @@ public enum WoundVisualType {
     BRUISE(
         v("bruise1", 10),
         v("bruise2", 10),
-        v("bruise_amogus", 1)   // easter egg
+        v("bruise_amogus", 1)   // sussy
     ),
     BITE(
         v("bite1", 10),

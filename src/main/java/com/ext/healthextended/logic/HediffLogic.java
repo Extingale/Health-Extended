@@ -13,7 +13,7 @@ import java.util.List;
 public final class HediffLogic {
 
     // Heart Attack suffocation is applied 1/s from PlayerEventHandler.
-    // At 2 HP head max, a 0.1 severity step reaches full loss in ~10 seconds.
+    // At 2 HP head max, a 0.1 severity step reaches full loss in ~10 seconds i think, unless you die first from somethng else anyways
     private static final float HEART_ATTACK_SUFFOCATION_PER_TICK = 0.1f;
     private static final float STARVATION_GROWTH_PER_TICK = 0.02f;
 

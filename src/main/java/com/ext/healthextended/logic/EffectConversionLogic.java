@@ -359,11 +359,6 @@ public final class EffectConversionLogic {
         return LocationalHealthLogic.chooseEnvironmentStatusTargetPart(player, isHarmful(effectInstance));
     }
 
-    /**
-     * Finds the first body part (starting from the wither-effect anchor) that still
-     * has HP remaining, so wither damage spreads to alive parts once earlier ones
-     * are destroyed.  Falls back to TORSO if every part is at 0 HP.
-     */
     private static BodyPart chooseWitherTargetPart(PlayerBodyData bodyData, BodyPart anchoredPart) {
         BodyPart[] order = {
                 anchoredPart,
@@ -385,7 +380,7 @@ public final class EffectConversionLogic {
             }
         }
 
-        // All parts destroyed — keep hitting torso to progress the heart-attack chain
+        // tis but a scratch
         return BodyPart.TORSO;
     }
 

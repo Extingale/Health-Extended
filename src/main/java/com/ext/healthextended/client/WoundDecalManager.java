@@ -127,6 +127,12 @@ public final class WoundDecalManager {
     /** Per-player composited overlay textures. */
     private static final Map<UUID, PlayerOverlay> overlays = new HashMap<>();
 
+    /**
+     * Pixels captured from downloaded skins just before HttpTexture auto-closes them.
+     * Keyed by skin ResourceLocation. Populated by HttpTextureMixin, cleared on world unload.
+     */
+    private static final Map<ResourceLocation, NativeImage> capturedSkinCache = new HashMap<>();
+
     /** Decal NativeImages loaded lazily from the resource pack, keyed by texture ResourceLocation. */
     private static final Map<ResourceLocation, NativeImage> decalCache = new HashMap<>();
     /** Locations that failed to load — suppresses repeated log spam. */
@@ -201,6 +207,25 @@ public final class WoundDecalManager {
     public static void invalidateAll() {
         overlays.values().forEach(PlayerOverlay::close);
         overlays.clear();
+        capturedSkinCache.values().forEach(NativeImage::close);
+        capturedSkinCache.clear();
+    }
+
+    /**
+     * Called by {@code HttpTextureMixin} immediately before vanilla auto-closes the
+     * NativeImage after GPU upload.  Stores a 64×64 copy so that
+     * {@link #copySkinPixels} can read it later (Strategy 1.5).
+     *
+     * Capes (64×32) and other non-skin-sized textures are ignored.
+     */
+    public static void captureSkinPixels(ResourceLocation location, NativeImage image) {
+        if (image.getWidth() != SKIN_SIZE || image.getHeight() != SKIN_SIZE) return;
+        NativeImage copy = new NativeImage(SKIN_SIZE, SKIN_SIZE, false);
+        for (int x = 0; x < SKIN_SIZE; x++)
+            for (int y = 0; y < SKIN_SIZE; y++)
+                copy.setPixelRGBA(x, y, image.getPixelRGBA(x, y));
+        NativeImage old = capturedSkinCache.put(location, copy);
+        if (old != null) old.close();
     }
 
     // =========================================================================
@@ -314,6 +339,16 @@ public final class WoundDecalManager {
                         target.setPixelRGBA(x, y, skin.getPixelRGBA(x, y));
                 return true;
             }
+        }
+
+        // Strategy 1.5: HttpTexture captured pixels (downloaded skins whose NativeImage
+        // is auto-closed with autoClose=true after GPU upload — see HttpTextureMixin).
+        NativeImage captured = capturedSkinCache.get(skinLoc);
+        if (captured != null) {
+            for (int x = 0; x < SKIN_SIZE; x++)
+                for (int y = 0; y < SKIN_SIZE; y++)
+                    target.setPixelRGBA(x, y, captured.getPixelRGBA(x, y));
+            return true;
         }
 
         // Strategy 2: Resource manager (default / bundled skin — load once, cache)

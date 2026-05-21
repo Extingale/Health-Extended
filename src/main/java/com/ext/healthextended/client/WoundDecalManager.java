@@ -129,9 +129,12 @@ public final class WoundDecalManager {
 
     /**
      * Pixels captured from downloaded skins just before HttpTexture auto-closes them.
-     * Keyed by skin ResourceLocation. Populated by HttpTextureMixin, cleared on world unload.
+     * Keyed by GL texture ID — avoids the ResourceLocation mismatch caused by HttpTexture
+     * storing the fallback default-skin location in its {@code location} field rather than
+     * the actual {@code minecraft:skins/<hash>} key it is registered under in TextureManager.
+     * Populated by HttpTextureMixin, cleared on world unload.
      */
-    private static final Map<ResourceLocation, NativeImage> capturedSkinCache = new HashMap<>();
+    private static final Map<Integer, NativeImage> capturedSkinCache = new HashMap<>();
 
     /** Decal NativeImages loaded lazily from the resource pack, keyed by texture ResourceLocation. */
     private static final Map<ResourceLocation, NativeImage> decalCache = new HashMap<>();
@@ -218,13 +221,13 @@ public final class WoundDecalManager {
      *
      * Capes (64×32) and other non-skin-sized textures are ignored.
      */
-    public static void captureSkinPixels(ResourceLocation location, NativeImage image) {
+    public static void captureSkinPixels(int glId, NativeImage image) {
         if (image.getWidth() != SKIN_SIZE || image.getHeight() != SKIN_SIZE) return;
         NativeImage copy = new NativeImage(SKIN_SIZE, SKIN_SIZE, false);
         for (int x = 0; x < SKIN_SIZE; x++)
             for (int y = 0; y < SKIN_SIZE; y++)
                 copy.setPixelRGBA(x, y, image.getPixelRGBA(x, y));
-        NativeImage old = capturedSkinCache.put(location, copy);
+        NativeImage old = capturedSkinCache.put(glId, copy);
         if (old != null) old.close();
     }
 
@@ -341,14 +344,17 @@ public final class WoundDecalManager {
             }
         }
 
-        // Strategy 1.5: HttpTexture captured pixels (downloaded skins whose NativeImage
-        // is auto-closed with autoClose=true after GPU upload — see HttpTextureMixin).
-        NativeImage captured = capturedSkinCache.get(skinLoc);
-        if (captured != null) {
-            for (int x = 0; x < SKIN_SIZE; x++)
-                for (int y = 0; y < SKIN_SIZE; y++)
-                    target.setPixelRGBA(x, y, captured.getPixelRGBA(x, y));
-            return true;
+        // Strategy 1.5: HttpTexture captured pixels (downloaded skins — NativeImage is
+        // auto-closed after GPU upload, so HttpTextureMixin snapshots them first).
+        // Keyed by GL texture ID to avoid the fallback-location mismatch in HttpTexture.
+        if (rawTex != null) {
+            NativeImage captured = capturedSkinCache.get(rawTex.getId());
+            if (captured != null) {
+                for (int x = 0; x < SKIN_SIZE; x++)
+                    for (int y = 0; y < SKIN_SIZE; y++)
+                        target.setPixelRGBA(x, y, captured.getPixelRGBA(x, y));
+                return true;
+            }
         }
 
         // Strategy 2: Resource manager (default / bundled skin — load once, cache)

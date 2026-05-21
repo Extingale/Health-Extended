@@ -4,8 +4,7 @@
   "compatibilityLevel": "JAVA_21",
   "client": [
     "client.AbstractClientPlayerMixin",
-    "client.HttpTextureMixin",
-    "client.SimpleTextureAccessor"
+    "client.HttpTextureMixin"
   ],
   "minVersion": "0.8"
 }

@@ -2,8 +2,8 @@ package com.ext.healthextended.mixin.client;
 
 import com.ext.healthextended.client.WoundDecalManager;
 import com.mojang.blaze3d.platform.NativeImage;
+import net.minecraft.client.renderer.texture.AbstractTexture;
 import net.minecraft.client.renderer.texture.HttpTexture;
-import net.minecraft.resources.ResourceLocation;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -27,9 +27,11 @@ public class HttpTextureMixin {
     )
     private void healthextended$captureForWounds(NativeImage image, CallbackInfo ci) {
         if (image != null) {
-            // location is protected in SimpleTexture (parent) — access via accessor mixin
-            ResourceLocation loc = ((SimpleTextureAccessor) (Object) this).healthextended$getLocation();
-            WoundDecalManager.captureSkinPixels(loc, image);
+            // HttpTexture.location is the DEFAULT skin fallback, not the texture manager key
+            // (minecraft:skins/<hash>). Use the GL texture ID instead — it's the same object
+            // regardless of which ResourceLocation you look it up by.
+            int glId = ((AbstractTexture) (Object) this).getId();
+            WoundDecalManager.captureSkinPixels(glId, image);
         }
     }
 }
